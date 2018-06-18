@@ -1,0 +1,180 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Create Instance with Sense Plugin for kibana which is mainly used as UI for querying elasticsearch",  
+  "Parameters": {
+    "elasticsearchEndPoint" : {
+      "Description" : "Elasticsearch End point should not include http://",
+      "Type" : "String"      
+    }    ,
+    "keyname" : {
+      "Description" : "ssh key pair name to connect to EC2 insance",
+      "Type" : "AWS::EC2::KeyPair::KeyName"
+   
+    }  ,
+
+    "PublicSubnet" : {
+    "Description" : "Subnet ID in which you want to launch EC2 instance",
+    "Type" : "AWS::EC2::Subnet::Id"
+  },
+    "VPC" : {
+    "Description" : "Subnet IDs",
+    "Type" : "AWS::EC2::VPC::Id"
+  }
+      },
+  
+    "Mappings": {
+    "AmazonLinuxAMI": {
+      "us-east-1":      { "AMI": "ami-1853ac65" },
+      "us-east-2":      { "AMI": "ami-25615740" },  
+      "us-west-2":      { "AMI": "ami-d874e0a0" },   
+      "eu-west-1":      { "AMI": "ami-3bfab942" },    
+      "eu-west-2":      { "AMI": "ami-dff017b8" },
+      "eu-central-1":   { "AMI": "ami-ac442ac3" },
+      "sa-east-1":      { "AMI": "ami-5339733f" },
+      "ap-southeast-1": { "AMI": "ami-e2adf99e" },
+      "ap-southeast-2": { "AMI": "ami-43874721" },   
+      "ap-northeast-1": { "AMI": "ami-a77c30c1" }  
+    }
+  },
+    
+  "Resources": {
+
+    "SensePluginSecGroup": {
+      "Type": "AWS::EC2::SecurityGroup",    
+      "Properties": {
+        "GroupDescription": "Security Group for Sense Plugin EC2 instance allowing port 22 and 5601",
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "KibanaSensePlugin"
+          }
+        ],
+
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "5601",
+            "ToPort": "5601",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+
+   
+    "WaitHandle01": {
+      "Type": "AWS::CloudFormation::WaitConditionHandle",
+      "Properties": {}
+    },
+    "WaitCondition01": {
+      "Type": "AWS::CloudFormation::WaitCondition",
+      "DependsOn": "SenseKibanaPluginInstance",
+      "Properties": {
+        "Handle": {
+          "Ref": "WaitHandle01"
+        },
+        "Timeout": "1800"
+      }
+    },
+
+    "SenseKibanaPluginInstance": {
+      "Type": "AWS::EC2::Instance",
+      "DependsOn": [
+        "SensePluginSecGroup"       
+      ],
+      "Properties": {
+        "KeyName": {
+          "Ref": "keyname"
+        },
+
+        "NetworkInterfaces": [ {
+      "AssociatePublicIpAddress": "true",
+      "DeviceIndex": "0",
+      "GroupSet": [{ "Ref" : "SensePluginSecGroup" }],
+      "SubnetId": { "Ref" : "PublicSubnet" }
+    } ],
+       
+        "ImageId": {
+          "Fn::FindInMap": [
+            "AmazonLinuxAMI",
+            {
+              "Ref": "AWS::Region"
+            },
+            "AMI"
+          ]
+        },
+        "InstanceType": "t2.micro",        
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "KibanaSensePlugin"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash -ex\n",
+                "cd /home/ec2-user\n",
+                "wget https://download.elastic.co/kibana/kibana/kibana-4.5.0-linux-x64.tar.gz\n",
+                "sudo tar -xzvf kibana-4.5.0-linux-x64.tar.gz\n",
+                "cd kibana-4.5.0-linux-x64/config/\n",
+                "IPADDRESS=`wget -qO- http://instance-data/latest/meta-data/local-ipv4`\n",
+                "sudo sed -i -e \"s/# server.port: 5601/server.port: 5601/g\" kibana.yml\n",  
+                "sudo sed -i -e \"s/# server.host: \\\"0.0.0.0\\\"/server.host: \\\"$IPADDRESS\\\"/g\" kibana.yml\n",
+                "sudo sed -i -e \"s/# elasticsearch.url/elasticsearch.url/g\" kibana.yml\n",
+                "sudo sed -i -e \"s/localhost:9200/",
+                {"Ref" :"elasticsearchEndPoint"},
+                ":80/g\" kibana.yml\n",
+                "cd /home/ec2-user/kibana-4.5.0-linux-x64\n",
+                "sudo ./bin/kibana plugin --install elastic/sense\n",
+                "sudo ./bin/kibana &\n",                   
+                "/opt/aws/bin/cfn-signal -s true '",
+                {
+                  "Ref": "WaitHandle01"
+                },
+                "'\n"
+              ]
+            ]
+          }
+        }
+          }
+    },
+
+
+    },
+
+
+     "Outputs" : {
+    "kibanaURL" : {
+      "Description": "you have to use this URL in your chrome web browser to access sense",
+      "Value" : {
+    "Fn::Join": ["", 
+                [   "http://",
+                    { "Fn::GetAtt" : [ "SenseKibanaPluginInstance", "PublicIp" ] },
+                    ":5601/app/sense"    
+                ]
+                ]}
+    },
+     "elasticsearchurl" : 
+     {"Value" : {
+    "Fn::Join": ["", 
+                [   "http://",
+                    { "Ref": "elasticsearchEndPoint"},
+                    ":80"    
+                ]
+                ]},
+    "Description": "This is the URL you need to paste for server in kibana ",    
+                }    
+  } 
+  }
